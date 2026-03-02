@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useDownloadsStore } from "../store/downloads";
 import { useAccounts } from "./useAccounts";
-import { accountHash } from "../utils/account";
+import { useSigningStore } from "../stores/signingStore";
+import { hashAccountIdentities } from "../utils/account";
 
 export function useDownloads() {
   const {
@@ -15,24 +16,48 @@ export function useDownloads() {
     deleteDownload,
   } = useDownloadsStore();
   const { accounts } = useAccounts();
+  const signingAccounts = useSigningStore((state) => state.accounts);
   const hashesRef = useRef("");
   const [hashToEmail, setHashToEmail] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Calculate original hashes preserving the order corresponding to 'accounts'
-      const hashes = await Promise.all(accounts.map((a) => accountHash(a)));
+      const hashes: string[] = [];
+      const hashSet = new Set<string>();
+      const map: Record<string, string> = {};
+
+      for (const account of accounts) {
+        const accountHashes = await hashAccountIdentities(account);
+        for (const hash of accountHashes) {
+          if (!hashSet.has(hash)) {
+            hashSet.add(hash);
+            hashes.push(hash);
+          }
+          map[hash] = account.email;
+        }
+      }
+
+      for (const account of signingAccounts) {
+        const accountHashes = await hashAccountIdentities({
+          directoryServicesIdentifier: account.session.dsid,
+          appleId: account.account.email,
+          email: account.email,
+        });
+        for (const hash of accountHashes) {
+          if (!hashSet.has(hash)) {
+            hashSet.add(hash);
+            hashes.push(hash);
+          }
+          map[hash] = account.email;
+        }
+      }
+
       // Use slice() before sort() so we don't mutate the original 'hashes' array
       const key = hashes.slice().sort().join(",");
       if (cancelled || key === hashesRef.current) return;
       hashesRef.current = key;
 
-      const map: Record<string, string> = {};
-      for (let i = 0; i < accounts.length; i++) {
-        // Now hashes[i] correctly maps to accounts[i]
-        map[hashes[i]] = accounts[i].email;
-      }
       setHashToEmail(map);
 
       setAccountHashes(hashes);
@@ -42,7 +67,7 @@ export function useDownloads() {
     return () => {
       cancelled = true;
     };
-  }, [accounts, setAccountHashes, fetchTasks]);
+  }, [accounts, signingAccounts, setAccountHashes, fetchTasks]);
 
   return {
     tasks,

@@ -32,13 +32,34 @@ export function firstAccountCountry(accounts: Account[]): string | undefined {
 export async function hashAccountIdentity(
   identity: AccountIdentity,
 ): Promise<string> {
-  const source =
-    identity.directoryServicesIdentifier || identity.appleId || identity.email;
-  if (!source) {
+  const hashes = await hashAccountIdentities(identity);
+  return hashes[0];
+}
+
+export async function hashAccountIdentities(
+  identity: AccountIdentity,
+): Promise<string[]> {
+  const normalizedDsid = identity.directoryServicesIdentifier?.trim();
+  const normalizedEmail = identity.email?.trim().toLowerCase();
+  const normalizedAppleId = identity.appleId?.trim().toLowerCase();
+
+  const sources: string[] = [];
+  if (normalizedDsid) {
+    sources.push(normalizedDsid);
+  }
+  if (normalizedEmail) {
+    sources.push(normalizedEmail);
+  }
+  if (normalizedAppleId && normalizedAppleId !== normalizedEmail) {
+    sources.push(normalizedAppleId);
+  }
+
+  if (sources.length === 0) {
     throw new Error("Unable to determine account identity");
   }
 
-  return sha256Hex(source);
+  const hashes = await Promise.all(sources.map((source) => sha256Hex(source)));
+  return Array.from(new Set(hashes));
 }
 
 export async function accountHash(account: Account): Promise<string> {

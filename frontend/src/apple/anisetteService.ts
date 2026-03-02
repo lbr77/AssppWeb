@@ -45,6 +45,10 @@ export async function provisionAnisette(): Promise<void> {
 
 export async function getAnisetteData(): Promise<AnisetteData> {
   const anisette = await initAnisette();
+
+  if (!anisette.isProvisioned) {
+    await anisette.provision();
+  }
   const headers = await anisette.getData();
 
   return {

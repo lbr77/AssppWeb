@@ -14,6 +14,7 @@ import {
   fetchAppIDs,
   fetchProvisioningProfile,
   fetchTeam,
+  revokeCertificate,
 } from '../../apple/developerApi';
 import { getAnisetteData } from '../../apple/anisetteService';
 import { readIpaInfo } from '../../apple/ipaInfo';
@@ -89,6 +90,15 @@ function buildTeamScopedBundleId(baseBundleId: string, teamId: string): string {
 function isSessionExpiredError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
   return message.includes('session has expired') || message.includes('(1100)');
+}
+
+function isCertificateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes('(7460)') ||
+    message.includes('current ios development certificate') ||
+    message.includes('pending certificate request')
+  );
 }
 
 export default function SigningIpa() {
@@ -230,7 +240,42 @@ export default function SigningIpa() {
 
       if (!certificate || !privateKey) {
         updateProgress(42, 'Creating development certificate...');
-        const created = await addCertificate(session, team, `AssppWeb-${Date.now()}`);
+        const createCertificate = async () => addCertificate(session, team, `AssppWeb-${Date.now()}`);
+
+        let created: Awaited<ReturnType<typeof addCertificate>>;
+        try {
+          created = await createCertificate();
+        } catch (createError) {
+          if (!isCertificateLimitError(createError)) {
+            throw createError;
+          }
+
+          const certificateToRevoke =
+            nextCertificates.find((item) => item.identifier === currentAccount.selectedCertificateId) ??
+            nextCertificates[0];
+
+          if (!certificateToRevoke) {
+            throw createError;
+          }
+
+          updateProgress(44, 'Certificate limit reached (7460), revoking previous certificate...');
+          await revokeCertificate(session, team, certificateToRevoke);
+          appendLog(`Revoked certificate: ${certificateToRevoke.identifier}`);
+
+          updateProgress(46, 'Refreshing certificates after revoke...');
+          const refreshedCertificates = await fetchCertificates(session, team);
+          nextCertificates = refreshedCertificates.map((item) => {
+            const localPrivateKey = localPrivateKeyById.get(item.identifier);
+            if (!localPrivateKey) {
+              return item;
+            }
+
+            return { ...item, privateKey: localPrivateKey };
+          });
+
+          updateProgress(48, 'Retrying development certificate creation...');
+          created = await createCertificate();
+        }
 
         privateKey = created.privateKey;
         certificate = { ...created.certificate, privateKey };
